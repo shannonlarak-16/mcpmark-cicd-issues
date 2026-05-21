@@ -1,0 +1,280 @@
+name: Pull Request Automation Workflow
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+
+# Cancel in-progress runs for the same PR
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref }}
+  cancel-in-progress: true
+
+jobs:
+  code-quality:
+    name: code-quality
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Run ESLint
+        id: eslint
+        continue-on-error: true
+        run: |
+          echo "## ESLint Results" >> eslint_output.txt
+          npm run lint 2>&1 | tee eslint_output.txt || echo "ESLint completed with warnings"
+          
+      - name: Run Prettier Check
+        id: prettier
+        continue-on-error: true
+        run: |
+          echo "## Prettier Results" >> prettier_output.txt
+          npm run format:check 2>&1 | tee prettier_output.txt || echo "Prettier check completed"
+          
+      - name: Post Code Quality Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const eslintOutput = fs.existsSync('eslint_output.txt') ? fs.readFileSync('eslint_output.txt', 'utf8') : 'No ESLint output';
+            const prettierOutput = fs.existsSync('prettier_output.txt') ? fs.readFileSync('prettier_output.txt', 'utf8') : 'No Prettier output';
+            
+            const comment = `## 📋 Code Quality Report
+            
+            ### ESLint
+            \`\`\`
+            ${eslintOutput.substring(0, 3000)}
+            \`\`\`
+            
+            ### Prettier
+            \`\`\`
+            ${prettierOutput.substring(0, 3000)}
+            \`\`\`
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  testing-suite:
+    name: testing-suite
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Run tests with coverage
+        run: npm test
+        
+      - name: Upload coverage artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 30
+          
+      - name: Post Coverage Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let coverageSummary = 'Coverage summary not available';
+            
+            if (fs.existsSync('coverage/coverage-summary.json')) {
+              const summary = JSON.parse(fs.readFileSync('coverage/coverage-summary.json', 'utf8'));
+              coverageSummary = `Total: ${summary.total.lines.pct}% lines, ${summary.total.statements.pct}% statements, ${summary.total.functions.pct}% functions, ${summary.total.branches.pct}% branches`;
+            }
+            
+            const comment = `## 🧪 Test Coverage Report
+            
+            \`\`\`
+            ${coverageSummary}
+            \`\`\`
+            
+            Coverage artifacts have been uploaded and are available for download.
+            `;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  security-scan:
+    name: security-scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Run npm audit
+        id: audit
+        continue-on-error: true
+        run: |
+          echo "## Dependency Audit" >> audit_output.txt
+          npm audit --json > audit.json 2>&1 || true
+          npm audit 2>&1 | tee audit_output.txt || echo "Audit completed"
+          
+      - name: Check for secrets
+        id: secrets
+        continue-on-error: true
+        run: |
+          echo "## Secrets Scan" >> secrets_output.txt
+          # Simple secret patterns check
+          if grep -r -E "(api[_-]?key|secret|password|token)\s*[:=]\s*['\"][^'\"]{8,}" --include="*.js" --include="*.json" . 2>/dev/null; then
+            echo "Potential secrets found!" | tee -a secrets_output.txt
+          else
+            echo "No obvious secrets detected in code" | tee secrets_output.txt
+          fi
+          
+      - name: Post Security Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const auditOutput = fs.existsSync('audit_output.txt') ? fs.readFileSync('audit_output.txt', 'utf8') : 'No audit output';
+            const secretsOutput = fs.existsSync('secrets_output.txt') ? fs.readFileSync('secrets_output.txt', 'utf8') : 'No secrets scan output';
+            
+            const comment = `## 🔒 Security Scan Report
+            
+            ### Vulnerabilities
+            \`\`\`
+            ${auditOutput.substring(0, 2000)}
+            \`\`\`
+            
+            ### Dependencies & Secrets
+            \`\`\`
+            ${secretsOutput.substring(0, 2000)}
+            \`\`\`
+            
+            _Note: This is an automated security scan. Please review any findings carefully._`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  build-validation:
+    name: build-validation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm ci
+        
+      - name: Build application
+        id: build
+        run: |
+          echo "Building application..."
+          npm run build
+          echo "Build completed successfully"
+          
+      - name: Validate endpoints
+        id: validate
+        run: |
+          echo "Starting server for validation..."
+          npm start &
+          SERVER_PID=$!
+          sleep 5
+          
+          # Check endpoints
+          echo "Checking /health endpoint..."
+          curl -f http://localhost:3000/health || exit 1
+          
+          echo "Checking / endpoint..."
+          curl -f http://localhost:3000/ || exit 1
+          
+          echo "Checking /api/data endpoint..."
+          curl -f http://localhost:3000/api/data || exit 1
+          
+          kill $SERVER_PID
+          echo "All endpoints validated successfully"
+          
+      - name: Create deployment artifact
+        run: |
+          mkdir -p deployment
+          cp -r index.js package.json package-lock.json deployment/ 2>/dev/null || cp -r index.js package.json deployment/
+          cd deployment
+          tar -czf ../deployment-artifact.tar.gz .
+          cd ..
+          echo "Deployment artifact created"
+          
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-artifact
+          path: deployment-artifact.tar.gz
+          retention-days: 30
+          
+      - name: Post Build Validation Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const comment = `## ✅ Build Validation Report
+            
+            ### Build Status
+            ✅ Application built successfully
+            
+            ### Endpoint Validation
+            ✅ All endpoints validated and accessible:
+            - GET /health
+            - GET /
+            - GET /api/data
+            
+            ### Artifacts
+            📦 Deployment artifact created and uploaded
+            
+            The application is ready for deployment preview.`;
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
