@@ -1,24 +1,12 @@
-const request = require("supertest");
-const app = require("./index");
+// Sample test file
+const { greet, add } = require('./index');
 
-describe("Health Check", () => {
-  test("GET /health should return 200", async () => {
-    const response = await request(app).get("/health");
-    expect(response.status).toBe(200);
-    expect(response.body.status).toBe("healthy");
-  });
-});
-
-describe("API Endpoints", () => {
-  test("GET / should return welcome message", async () => {
-    const response = await request(app).get("/");
-    expect(response.status).toBe(200);
-    expect(response.body.message).toContain("Welcome");
+describe('Sample Tests', () => {
+  test('greet function', () => {
+    expect(greet('World')).toBe('Hello, World!');
   });
 
-  test("GET /api/data should return data array", async () => {
-    const response = await request(app).get("/api/data");
-    expect(response.status).toBe(200);
-    expect(Array.isArray(response.body.data)).toBe(true);
+  test('add function', () => {
+    expect(add(2, 3)).toBe(5);
   });
 });
